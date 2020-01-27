@@ -38,10 +38,6 @@ class MockPlatform final : public TestPlatform {
     return task_runner_;
   }
 
-  void CallOnForegroundThread(v8::Isolate* isolate, Task* task) override {
-    task_runner_->PostTask(std::unique_ptr<Task>(task));
-  }
-
   void CallOnWorkerThread(std::unique_ptr<v8::Task> task) override {
     task_runner_->PostTask(std::move(task));
   }
@@ -131,7 +127,7 @@ class StreamTester {
     v8::Local<v8::Context> context = isolate->GetCurrentContext();
 
     stream_ = i_isolate->wasm_engine()->StartStreamingCompilation(
-        i_isolate, kAllWasmFeatures, v8::Utils::OpenHandle(*context),
+        i_isolate, WasmFeatures::All(), v8::Utils::OpenHandle(*context),
         "WebAssembly.compileStreaming()",
         std::make_shared<TestResolver>(&state_, &error_message_,
                                        &native_module_));
@@ -263,9 +259,10 @@ STREAM_TEST(TestAllBytesArriveAOTCompilerFinishesFirst) {
 
 size_t GetFunctionOffset(i::Isolate* isolate, const uint8_t* buffer,
                          size_t size, size_t index) {
-  ModuleResult result = DecodeWasmModule(
-      kAllWasmFeatures, buffer, buffer + size, false, ModuleOrigin::kWasmOrigin,
-      isolate->counters(), isolate->wasm_engine()->allocator());
+  ModuleResult result =
+      DecodeWasmModule(WasmFeatures::All(), buffer, buffer + size, false,
+                       ModuleOrigin::kWasmOrigin, isolate->counters(),
+                       isolate->wasm_engine()->allocator());
   CHECK(result.ok());
   const WasmFunction* func = &result.value()->functions[index];
   return func->code.offset();
@@ -1216,6 +1213,41 @@ STREAM_TEST(TestCompileErrorFunctionName) {
         "#0:\"f\" failed: function body must end with \"end\" opcode @+25",
         tester.error_message());
   }
+}
+
+STREAM_TEST(TestSetModuleCodeSection) {
+  StreamTester tester;
+
+  uint8_t code[] = {
+      U32V_1(4),                  // body size
+      U32V_1(0),                  // locals count
+      kExprLocalGet, 0, kExprEnd  // body
+  };
+
+  const uint8_t bytes[] = {
+      WASM_MODULE_HEADER,                   // module header
+      kTypeSectionCode,                     // section code
+      U32V_1(1 + SIZEOF_SIG_ENTRY_x_x),     // section size
+      U32V_1(1),                            // type count
+      SIG_ENTRY_x_x(kLocalI32, kLocalI32),  // signature entry
+      kFunctionSectionCode,                 // section code
+      U32V_1(1 + 1),                        // section size
+      U32V_1(1),                            // functions count
+      0,                                    // signature index
+      kCodeSectionCode,                     // section code
+      U32V_1(1 + arraysize(code) * 1),      // section size
+      U32V_1(1),                            // functions count
+  };
+
+  tester.OnBytesReceived(bytes, arraysize(bytes));
+  tester.OnBytesReceived(code, arraysize(code));
+  tester.FinishStream();
+  tester.RunCompilerTasks();
+  CHECK_EQ(tester.native_module()->module()->code.offset(),
+           arraysize(bytes) - 1);
+  CHECK_EQ(tester.native_module()->module()->code.length(),
+           arraysize(code) + 1);
+  CHECK(tester.IsPromiseFulfilled());
 }
 
 #undef STREAM_TEST

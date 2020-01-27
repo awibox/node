@@ -26,7 +26,7 @@ Address DeserializerAllocator::AllocateRaw(SnapshotSpace space, int size) {
     AlwaysAllocateScope scope(heap_);
     // Note that we currently do not support deserialization of large code
     // objects.
-    LargeObjectSpace* lo_space = heap_->lo_space();
+    OldLargeObjectSpace* lo_space = heap_->lo_space();
     AllocationResult result = lo_space->AllocateRaw(size);
     HeapObject obj = result.ToObjectChecked();
     deserialized_large_objects_.push_back(obj);
@@ -57,6 +57,12 @@ Address DeserializerAllocator::Allocate(SnapshotSpace space, int size) {
   Address address;
   HeapObject obj;
 
+  if (V8_ENABLE_THIRD_PARTY_HEAP_BOOL) {
+    AllocationType type = (space == SnapshotSpace::kCode)
+                              ? AllocationType::kCode
+                              : AllocationType::kYoung;
+    return heap_->DeserializerAllocate(type, size);
+  }
   if (next_alignment_ != kWordAligned) {
     const int reserved = size + Heap::GetMaximumFillToAlign(next_alignment_);
     address = AllocateRaw(space, reserved);
@@ -110,7 +116,8 @@ HeapObject DeserializerAllocator::GetObject(SnapshotSpace space,
   if (next_alignment_ != kWordAligned) {
     int padding = Heap::GetFillToAlign(address, next_alignment_);
     next_alignment_ = kWordAligned;
-    DCHECK(padding == 0 || HeapObject::FromAddress(address).IsFiller());
+    DCHECK(padding == 0 ||
+           HeapObject::FromAddress(address).IsFreeSpaceOrFiller());
     address += padding;
   }
   return HeapObject::FromAddress(address);
