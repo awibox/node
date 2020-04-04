@@ -26,6 +26,7 @@ const { internalBinding } = require('internal/test/binding');
 const JSStream = internalBinding('js_stream').JSStream;
 const util = require('util');
 const vm = require('vm');
+const v8 = require('v8');
 const { previewEntries } = internalBinding('util');
 const { inspect } = util;
 const { MessageChannel } = require('worker_threads');
@@ -694,6 +695,28 @@ assert.strictEqual(util.inspect(-5e-324), '-5e-324');
   );
 
   Error.stackTraceLimit = tmp;
+}
+
+// Prevent enumerable error properties from being printed.
+{
+  let err = new Error();
+  err.message = 'foobar';
+  let out = util.inspect(err).split('\n');
+  assert.strictEqual(out[0], 'Error: foobar');
+  assert(out[out.length - 1].startsWith('    at '));
+  // Reset the error, the stack is otherwise not recreated.
+  err = new Error();
+  err.message = 'foobar';
+  err.name = 'Unique';
+  Object.defineProperty(err, 'stack', { value: err.stack, enumerable: true });
+  out = util.inspect(err).split('\n');
+  assert.strictEqual(out[0], 'Unique: foobar');
+  assert(out[out.length - 1].startsWith('    at '));
+  err.name = 'Baz';
+  out = util.inspect(err).split('\n');
+  assert.strictEqual(out[0], 'Unique: foobar');
+  assert.strictEqual(out[out.length - 2], "  name: 'Baz'");
+  assert.strictEqual(out[out.length - 1], '}');
 }
 
 // Doesn't capture stack trace.
@@ -2532,24 +2555,23 @@ assert.strictEqual(
     'unescape', 'eval', 'isFinite',
     'isNaN', 'SharedArrayBuffer', 'Atomics',
     'globalThis', 'WebAssembly', 'global',
-    'process', 'GLOBAL', 'root',
-    'Buffer', 'URL', 'URLSearchParams',
-    'TextEncoder', 'TextDecoder', 'clearInterval',
-    'clearTimeout', 'setInterval', 'setTimeout',
-    'queueMicrotask', 'clearImmediate', 'setImmediate',
-    'module', 'require', 'assert',
-    'async_hooks', 'buffer', 'child_process',
-    'cluster', 'crypto', 'dgram',
-    'dns', 'domain', 'events',
-    'fs', 'http', 'http2',
-    'https', 'inspector', 'net',
-    'os', 'path', 'perf_hooks',
-    'punycode', 'querystring', 'readline',
-    'repl', 'stream', 'string_decoder',
-    'tls', 'trace_events', 'tty',
-    'url', 'v8', 'vm',
-    'worker_threads', 'zlib', '_',
-    '_error', 'util'
+    'process', 'Buffer', 'URL',
+    'URLSearchParams', 'TextEncoder', 'TextDecoder',
+    'clearInterval', 'clearTimeout', 'setInterval',
+    'setTimeout', 'queueMicrotask', 'clearImmediate',
+    'setImmediate', 'module', 'require',
+    'assert', 'async_hooks', 'buffer',
+    'child_process', 'cluster', 'crypto',
+    'dgram', 'dns', 'domain',
+    'events', 'fs', 'http',
+    'http2', 'https', 'inspector',
+    'net', 'os', 'path',
+    'perf_hooks', 'punycode', 'querystring',
+    'readline', 'repl', 'stream',
+    'string_decoder', 'tls', 'trace_events',
+    'tty', 'url', 'v8',
+    'vm', 'worker_threads', 'zlib',
+    '_', '_error', 'util'
   ];
 
   out = util.inspect(
@@ -2558,44 +2580,43 @@ assert.strictEqual(
   );
   expected = [
     '[',
-    "  'Object',         'Function',           'Array',",
-    "  'Number',         'parseFloat',         'parseInt',",
-    "  'Infinity',       'NaN',                'undefined',",
-    "  'Boolean',        'String',             'Symbol',",
-    "  'Date',           'Promise',            'RegExp',",
-    "  'Error',          'EvalError',          'RangeError',",
-    "  'ReferenceError', 'SyntaxError',        'TypeError',",
-    "  'URIError',       'JSON',               'Math',",
-    "  'console',        'Intl',               'ArrayBuffer',",
-    "  'Uint8Array',     'Int8Array',          'Uint16Array',",
-    "  'Int16Array',     'Uint32Array',        'Int32Array',",
-    "  'Float32Array',   'Float64Array',       'Uint8ClampedArray',",
-    "  'BigUint64Array', 'BigInt64Array',      'DataView',",
-    "  'Map',            'BigInt',             'Set',",
-    "  'WeakMap',        'WeakSet',            'Proxy',",
-    "  'Reflect',        'decodeURI',          'decodeURIComponent',",
-    "  'encodeURI',      'encodeURIComponent', 'escape',",
-    "  'unescape',       'eval',               'isFinite',",
-    "  'isNaN',          'SharedArrayBuffer',  'Atomics',",
-    "  'globalThis',     'WebAssembly',        'global',",
-    "  'process',        'GLOBAL',             'root',",
-    "  'Buffer',         'URL',                'URLSearchParams',",
-    "  'TextEncoder',    'TextDecoder',        'clearInterval',",
-    "  'clearTimeout',   'setInterval',        'setTimeout',",
-    "  'queueMicrotask', 'clearImmediate',     'setImmediate',",
-    "  'module',         'require',            'assert',",
-    "  'async_hooks',    'buffer',             'child_process',",
-    "  'cluster',        'crypto',             'dgram',",
-    "  'dns',            'domain',             'events',",
-    "  'fs',             'http',               'http2',",
-    "  'https',          'inspector',          'net',",
-    "  'os',             'path',               'perf_hooks',",
-    "  'punycode',       'querystring',        'readline',",
-    "  'repl',           'stream',             'string_decoder',",
-    "  'tls',            'trace_events',       'tty',",
-    "  'url',            'v8',                 'vm',",
-    "  'worker_threads', 'zlib',               '_',",
-    "  '_error',         'util'",
+    "  'Object',          'Function',           'Array',",
+    "  'Number',          'parseFloat',         'parseInt',",
+    "  'Infinity',        'NaN',                'undefined',",
+    "  'Boolean',         'String',             'Symbol',",
+    "  'Date',            'Promise',            'RegExp',",
+    "  'Error',           'EvalError',          'RangeError',",
+    "  'ReferenceError',  'SyntaxError',        'TypeError',",
+    "  'URIError',        'JSON',               'Math',",
+    "  'console',         'Intl',               'ArrayBuffer',",
+    "  'Uint8Array',      'Int8Array',          'Uint16Array',",
+    "  'Int16Array',      'Uint32Array',        'Int32Array',",
+    "  'Float32Array',    'Float64Array',       'Uint8ClampedArray',",
+    "  'BigUint64Array',  'BigInt64Array',      'DataView',",
+    "  'Map',             'BigInt',             'Set',",
+    "  'WeakMap',         'WeakSet',            'Proxy',",
+    "  'Reflect',         'decodeURI',          'decodeURIComponent',",
+    "  'encodeURI',       'encodeURIComponent', 'escape',",
+    "  'unescape',        'eval',               'isFinite',",
+    "  'isNaN',           'SharedArrayBuffer',  'Atomics',",
+    "  'globalThis',      'WebAssembly',        'global',",
+    "  'process',         'Buffer',             'URL',",
+    "  'URLSearchParams', 'TextEncoder',        'TextDecoder',",
+    "  'clearInterval',   'clearTimeout',       'setInterval',",
+    "  'setTimeout',      'queueMicrotask',     'clearImmediate',",
+    "  'setImmediate',    'module',             'require',",
+    "  'assert',          'async_hooks',        'buffer',",
+    "  'child_process',   'cluster',            'crypto',",
+    "  'dgram',           'dns',                'domain',",
+    "  'events',          'fs',                 'http',",
+    "  'http2',           'https',              'inspector',",
+    "  'net',             'os',                 'path',",
+    "  'perf_hooks',      'punycode',           'querystring',",
+    "  'readline',        'repl',               'stream',",
+    "  'string_decoder',  'tls',                'trace_events',",
+    "  'tty',             'url',                'v8',",
+    "  'vm',              'worker_threads',     'zlib',",
+    "  '_',               '_error',             'util'",
     ']'
   ].join('\n');
 
@@ -2724,4 +2745,37 @@ assert.strictEqual(
     '{ \x1B[2mabc: \x1B[33mtrue\x1B[39m\x1B[22m, ' +
       '\x1B[2mdef: \x1B[33m5\x1B[39m\x1B[22m }'
   );
+}
+
+// Test changing util.inspect.colors colors and aliases.
+{
+  const colors = util.inspect.colors;
+
+  const originalValue = colors.gray;
+
+  // "grey" is reference-equal alias of "gray".
+  assert.strictEqual(colors.grey, colors.gray);
+
+  // Assigninging one should assign the other. This tests that the alias setter
+  // function keeps things reference-equal.
+  colors.gray = [0, 0];
+  assert.deepStrictEqual(colors.gray, [0, 0]);
+  assert.strictEqual(colors.grey, colors.gray);
+
+  colors.grey = [1, 1];
+  assert.deepStrictEqual(colors.grey, [1, 1]);
+  assert.strictEqual(colors.grey, colors.gray);
+
+  // Restore original value to avoid side effects in other tests.
+  colors.gray = originalValue;
+  assert.deepStrictEqual(colors.gray, originalValue);
+  assert.strictEqual(colors.grey, colors.gray);
+}
+
+// https://github.com/nodejs/node/issues/31889
+{
+  v8.setFlagsFromString('--allow-natives-syntax');
+  const undetectable = vm.runInThisContext('%GetUndetectable()');
+  v8.setFlagsFromString('--no-allow-natives-syntax');
+  assert.strictEqual(inspect(undetectable), '{}');
 }

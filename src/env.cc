@@ -1,6 +1,7 @@
 #include "env.h"
 
 #include "async_wrap.h"
+#include "debug_utils-inl.h"
 #include "memory_tracker-inl.h"
 #include "node_buffer.h"
 #include "node_context_data.h"
@@ -63,9 +64,9 @@ std::vector<size_t> IsolateData::Serialize(SnapshotCreator* creator) {
   // but that's not part of the V8 API contract so we use an array
   // just to be safe.
 
-#define VP(PropertyName, StringValue) V(v8::Private, PropertyName)
-#define VY(PropertyName, StringValue) V(v8::Symbol, PropertyName)
-#define VS(PropertyName, StringValue) V(v8::String, PropertyName)
+#define VP(PropertyName, StringValue) V(Private, PropertyName)
+#define VY(PropertyName, StringValue) V(Symbol, PropertyName)
+#define VS(PropertyName, StringValue) V(String, PropertyName)
 #define V(TypeName, PropertyName)                                              \
   indexes.push_back(creator->AddData(PropertyName##_.Get(isolate)));
   PER_ISOLATE_PRIVATE_SYMBOL_PROPERTIES(VP)
@@ -75,6 +76,8 @@ std::vector<size_t> IsolateData::Serialize(SnapshotCreator* creator) {
 #undef VY
 #undef VS
 #undef VP
+  for (size_t i = 0; i < AsyncWrap::PROVIDERS_LENGTH; i++)
+    indexes.push_back(creator->AddData(async_wrap_provider(i)));
 
   return indexes;
 }
@@ -83,9 +86,9 @@ void IsolateData::DeserializeProperties(const std::vector<size_t>* indexes) {
   size_t i = 0;
   HandleScope handle_scope(isolate_);
 
-#define VP(PropertyName, StringValue) V(v8::Private, PropertyName)
-#define VY(PropertyName, StringValue) V(v8::Symbol, PropertyName)
-#define VS(PropertyName, StringValue) V(v8::String, PropertyName)
+#define VP(PropertyName, StringValue) V(Private, PropertyName)
+#define VY(PropertyName, StringValue) V(Symbol, PropertyName)
+#define VS(PropertyName, StringValue) V(String, PropertyName)
 #define V(TypeName, PropertyName)                                              \
   do {                                                                         \
     MaybeLocal<TypeName> field =                                               \
@@ -102,6 +105,15 @@ void IsolateData::DeserializeProperties(const std::vector<size_t>* indexes) {
 #undef VY
 #undef VS
 #undef VP
+
+  for (size_t j = 0; j < AsyncWrap::PROVIDERS_LENGTH; j++) {
+    MaybeLocal<String> field =
+        isolate_->GetDataFromSnapshotOnce<String>((*indexes)[i++]);
+    if (field.IsEmpty()) {
+      fprintf(stderr, "Failed to deserialize AsyncWrap provider %zu\n", j);
+    }
+    async_wrap_providers_[j].Set(isolate_, field.ToLocalChecked());
+  }
 }
 
 void IsolateData::CreateProperties() {
@@ -152,6 +164,20 @@ void IsolateData::CreateProperties() {
           .ToLocalChecked());
   PER_ISOLATE_STRING_PROPERTIES(V)
 #undef V
+
+  // Create all the provider strings that will be passed to JS. Place them in
+  // an array so the array index matches the PROVIDER id offset. This way the
+  // strings can be retrieved quickly.
+#define V(Provider)                                                           \
+  async_wrap_providers_[AsyncWrap::PROVIDER_ ## Provider].Set(                \
+      isolate_,                                                               \
+      v8::String::NewFromOneByte(                                             \
+        isolate_,                                                             \
+        reinterpret_cast<const uint8_t*>(#Provider),                          \
+        v8::NewStringType::kInternalized,                                     \
+        sizeof(#Provider) - 1).ToLocalChecked());
+  NODE_ASYNC_PROVIDER_TYPES(V)
+#undef V
 }
 
 IsolateData::IsolateData(Isolate* isolate,
@@ -180,14 +206,16 @@ IsolateData::IsolateData(Isolate* isolate,
 
 void IsolateData::MemoryInfo(MemoryTracker* tracker) const {
 #define V(PropertyName, StringValue)                                           \
-  tracker->TrackField(#PropertyName, PropertyName(isolate()));
+  tracker->TrackField(#PropertyName, PropertyName());
   PER_ISOLATE_SYMBOL_PROPERTIES(V)
 #undef V
 
 #define V(PropertyName, StringValue)                                           \
-  tracker->TrackField(#PropertyName, PropertyName(isolate()));
+  tracker->TrackField(#PropertyName, PropertyName());
   PER_ISOLATE_STRING_PROPERTIES(V)
 #undef V
+
+  tracker->TrackField("async_wrap_providers", async_wrap_providers_);
 
   if (node_allocator_ != nullptr) {
     tracker->TrackFieldWithSize(
@@ -206,7 +234,7 @@ void InitThreadLocalOnce() {
 }
 
 void TrackingTraceStateObserver::UpdateTraceCategoryState() {
-  if (!env_->owns_process_state()) {
+  if (!env_->owns_process_state() || !env_->can_call_into_js()) {
     // Ideally, we’d have a consistent story that treats all threads/Environment
     // instances equally here. However, tracing is essentially global, and this
     // callback is called from whichever thread calls `StartTracing()` or
@@ -227,14 +255,7 @@ void TrackingTraceStateObserver::UpdateTraceCategoryState() {
   TryCatchScope try_catch(env_);
   try_catch.SetVerbose(true);
   Local<Value> args[] = {Boolean::New(isolate, async_hooks_enabled)};
-  cb->Call(env_->context(), Undefined(isolate), arraysize(args), args)
-      .ToLocalChecked();
-}
-
-static std::atomic<uint64_t> next_thread_id{0};
-
-uint64_t Environment::AllocateThreadId() {
-  return next_thread_id++;
+  USE(cb->Call(env_->context(), Undefined(isolate), arraysize(args), args));
 }
 
 void Environment::CreateProperties() {
@@ -293,8 +314,8 @@ Environment::Environment(IsolateData* isolate_data,
                          Local<Context> context,
                          const std::vector<std::string>& args,
                          const std::vector<std::string>& exec_args,
-                         Flags flags,
-                         uint64_t thread_id)
+                         EnvironmentFlags::Flags flags,
+                         ThreadId thread_id)
     : isolate_(context->GetIsolate()),
       isolate_data_(isolate_data),
       immediate_info_(context->GetIsolate()),
@@ -306,7 +327,8 @@ Environment::Environment(IsolateData* isolate_data,
       should_abort_on_uncaught_toggle_(isolate_, 1),
       stream_base_state_(isolate_, StreamBase::kNumStreamBaseStateFields),
       flags_(flags),
-      thread_id_(thread_id == kNoThreadId ? AllocateThreadId() : thread_id),
+      thread_id_(thread_id.id == static_cast<uint64_t>(-1) ?
+          AllocateEnvironmentThreadId().id : thread_id.id),
       fs_stats_field_array_(isolate_, kFsStatsBufferLength),
       fs_stats_field_bigint_array_(isolate_, kFsStatsBufferLength),
       context_(context->GetIsolate(), context) {
@@ -314,14 +336,24 @@ Environment::Environment(IsolateData* isolate_data,
   HandleScope handle_scope(isolate());
   Context::Scope context_scope(context);
 
+  // Set some flags if only kDefaultFlags was passed. This can make API version
+  // transitions easier for embedders.
+  if (flags_ & EnvironmentFlags::kDefaultFlags) {
+    flags_ = flags_ |
+        EnvironmentFlags::kOwnsProcessState |
+        EnvironmentFlags::kOwnsInspector;
+  }
+
   set_env_vars(per_process::system_environment);
+  enabled_debug_list_.Parse(this);
 
   // We create new copies of the per-Environment option sets, so that it is
   // easier to modify them after Environment creation. The defaults are
   // part of the per-Isolate option set, for which in turn the defaults are
   // part of the per-process option set.
   options_.reset(new EnvironmentOptions(*isolate_data->options()->per_env));
-  inspector_host_port_.reset(new HostPort(options_->debug_options().host_port));
+  inspector_host_port_.reset(
+      new ExclusiveAccess<HostPort>(options_->debug_options().host_port));
 
 #if HAVE_INSPECTOR
   // We can only create the inspector agent after having cloned the options.
@@ -329,6 +361,10 @@ Environment::Environment(IsolateData* isolate_data,
 #endif
 
   AssignToContext(context, ContextInfo(""));
+
+  static uv_once_t init_once = UV_ONCE_INIT;
+  uv_once(&init_once, InitThreadLocalOnce);
+  uv_key_set(&thread_local_env, this);
 
   if (tracing::AgentWriterHandle* writer = GetTracingAgentWriter()) {
     trace_state_observer_ = std::make_unique<TrackingTraceStateObserver>(this);
@@ -346,7 +382,7 @@ Environment::Environment(IsolateData* isolate_data,
       this);
 
   performance_state_ =
-      std::make_unique<performance::performance_state>(isolate());
+      std::make_unique<performance::PerformanceState>(isolate());
   performance_state_->Mark(
       performance::NODE_PERFORMANCE_MILESTONE_ENVIRONMENT);
   performance_state_->Mark(performance::NODE_PERFORMANCE_MILESTONE_NODE_START,
@@ -374,10 +410,6 @@ Environment::Environment(IsolateData* isolate_data,
   // By default, always abort when --abort-on-uncaught-exception was passed.
   should_abort_on_uncaught_toggle_[0] = 1;
 
-  std::string debug_cats;
-  credentials::SafeGetenv("NODE_DEBUG_NATIVE", &debug_cats, this);
-  set_debug_categories(debug_cats, true);
-
   if (options_->no_force_async_hooks_checks) {
     async_hooks_.no_force_checks();
   }
@@ -389,6 +421,9 @@ Environment::Environment(IsolateData* isolate_data,
 
 Environment::~Environment() {
   if (interrupt_data_ != nullptr) *interrupt_data_ = nullptr;
+
+  // FreeEnvironment() should have set this.
+  CHECK(is_stopping());
 
   isolate()->GetHeapProfiler()->RemoveBuildEmbedderGraphCallback(
       BuildEmbedderGraph, this);
@@ -473,6 +508,15 @@ void Environment::InitializeLibuv(bool start_profiler_idle_notifier) {
   uv_unref(reinterpret_cast<uv_handle_t*>(&idle_check_handle_));
   uv_unref(reinterpret_cast<uv_handle_t*>(&task_queues_async_));
 
+  {
+    Mutex::ScopedLock lock(native_immediates_threadsafe_mutex_);
+    task_queues_async_initialized_ = true;
+    if (native_immediates_threadsafe_.size() > 0 ||
+        native_immediates_interrupts_.size() > 0) {
+      uv_async_send(&task_queues_async_);
+    }
+  }
+
   // Register clean-up cb to be called to clean up the handles
   // when the environment is freed, note that they are not cleaned in
   // the one environment per process setup, but will be called in
@@ -482,10 +526,6 @@ void Environment::InitializeLibuv(bool start_profiler_idle_notifier) {
   if (start_profiler_idle_notifier) {
     StartProfilerIdleNotifier();
   }
-
-  static uv_once_t init_once = UV_ONCE_INIT;
-  uv_once(&init_once, InitThreadLocalOnce);
-  uv_key_set(&thread_local_env, this);
 }
 
 void Environment::ExitEnv() {
@@ -534,6 +574,11 @@ void Environment::RegisterHandleCleanups() {
 }
 
 void Environment::CleanupHandles() {
+  {
+    Mutex::ScopedLock lock(native_immediates_threadsafe_mutex_);
+    task_queues_async_initialized_ = false;
+  }
+
   Isolate::DisallowJavascriptExecutionScope disallow_js(isolate(),
       Isolate::DisallowJavascriptExecutionScope::THROW_ON_FAILURE);
 
@@ -863,29 +908,6 @@ Local<Value> Environment::GetNow() {
     return Number::New(isolate(), static_cast<double>(now));
 }
 
-void Environment::set_debug_categories(const std::string& cats, bool enabled) {
-  std::string debug_categories = cats;
-  while (!debug_categories.empty()) {
-    std::string::size_type comma_pos = debug_categories.find(',');
-    std::string wanted = ToLower(debug_categories.substr(0, comma_pos));
-
-#define V(name)                                                          \
-    {                                                                    \
-      static const std::string available_category = ToLower(#name);      \
-      if (available_category.find(wanted) != std::string::npos)          \
-        set_debug_enabled(DebugCategory::name, enabled);                 \
-    }
-
-    DEBUG_CATEGORY_NAMES(V)
-#undef V
-
-    if (comma_pos == std::string::npos)
-      break;
-    // Use everything after the `,` as the list for the next iteration.
-    debug_categories = debug_categories.substr(comma_pos + 1);
-  }
-}
-
 void CollectExceptionInfo(Environment* env,
                           Local<Object> obj,
                           int errorno,
@@ -955,7 +977,6 @@ void TickInfo::MemoryInfo(MemoryTracker* tracker) const {
 }
 
 void AsyncHooks::MemoryInfo(MemoryTracker* tracker) const {
-  tracker->TrackField("providers", providers_);
   tracker->TrackField("async_ids_stack", async_ids_stack_);
   tracker->TrackField("fields", fields_);
   tracker->TrackField("async_id_fields", async_id_fields_);
@@ -989,16 +1010,12 @@ void Environment::Exit(int exit_code) {
                     StackTrace::CurrentStackTrace(
                         isolate(), stack_trace_limit(), StackTrace::kDetailed));
   }
-  if (is_main_thread()) {
-    stop_sub_worker_contexts();
-    DisposePlatform();
-    exit(exit_code);
-  } else {
-    worker_context_->Exit(exit_code);
-  }
+  process_exit_handler_(this, exit_code);
 }
 
 void Environment::stop_sub_worker_contexts() {
+  DCHECK_EQ(Isolate::GetCurrent(), isolate());
+
   while (!sub_worker_contexts_.empty()) {
     Worker* w = *sub_worker_contexts_.begin();
     remove_sub_worker_context(w);
@@ -1008,14 +1025,14 @@ void Environment::stop_sub_worker_contexts() {
 }
 
 Environment* Environment::worker_parent_env() const {
-  if (worker_context_ == nullptr) return nullptr;
-  return worker_context_->env();
+  if (worker_context() == nullptr) return nullptr;
+  return worker_context()->env();
 }
 
 void MemoryTracker::TrackField(const char* edge_name,
                                const CleanupHookCallback& value,
                                const char* node_name) {
-  v8::HandleScope handle_scope(isolate_);
+  HandleScope handle_scope(isolate_);
   // Here, we utilize the fact that CleanupHookCallback instances
   // are all unique and won't be tracked twice in one BuildEmbedderGraph
   // callback.
@@ -1125,6 +1142,7 @@ void Environment::CleanupFinalizationGroups() {
       if (try_catch.HasCaught() && !try_catch.HasTerminated())
         errors::TriggerUncaughtException(isolate(), try_catch);
       // Re-schedule the execution of the remainder of the queue.
+      CHECK(task_queues_async_initialized_);
       uv_async_send(&task_queues_async_);
       return;
     }

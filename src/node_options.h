@@ -106,6 +106,7 @@ class EnvironmentOptions : public Options {
   std::string experimental_specifier_resolution;
   std::string es_module_specifier_resolution;
   bool experimental_wasm_modules = false;
+  bool experimental_import_meta_resolve = false;
   std::string module_type;
   std::string experimental_policy;
   std::string experimental_policy_integrity;
@@ -115,7 +116,7 @@ class EnvironmentOptions : public Options {
   bool expose_internals = false;
   bool frozen_intrinsics = false;
   std::string heap_snapshot_signal;
-  uint64_t max_http_header_size = 8 * 1024;
+  uint64_t max_http_header_size = 16 * 1024;
   bool no_deprecation = false;
   bool no_force_async_hooks_checks = false;
   bool no_warnings = false;
@@ -150,9 +151,6 @@ class EnvironmentOptions : public Options {
 
   bool syntax_check_only = false;
   bool has_eval_string = false;
-#ifdef NODE_REPORT
-  bool experimental_report = false;
-#endif  //  NODE_REPORT
   bool experimental_wasi = false;
   std::string eval_string;
   bool print_eval = false;
@@ -186,15 +184,9 @@ class PerIsolateOptions : public Options {
   std::shared_ptr<EnvironmentOptions> per_env { new EnvironmentOptions() };
   bool track_heap_objects = false;
   bool no_node_snapshot = false;
-
-#ifdef NODE_REPORT
   bool report_uncaught_exception = false;
   bool report_on_signal = false;
-  bool report_on_fatalerror = false;
-  std::string report_signal;
-  std::string report_filename;
-  std::string report_directory;
-#endif  //  NODE_REPORT
+  std::string report_signal = "SIGUSR2";
   inline EnvironmentOptions* get_per_env_options();
   void CheckOptions(std::vector<std::string>* errors) override;
 };
@@ -209,6 +201,7 @@ class PerProcessOptions : public Options {
   int64_t v8_thread_pool_size = 4;
   bool zero_fill_all_buffers = false;
   bool debug_arraybuffer_allocations = false;
+  std::string disable_proto;
 
   std::vector<std::string> security_reverts;
   bool print_bash_completion = false;
@@ -238,10 +231,11 @@ class PerProcessOptions : public Options {
 #endif
   std::string use_largepages = "off";
   bool trace_sigint = false;
-
-#ifdef NODE_REPORT
   std::vector<std::string> cmdline;
-#endif  //  NODE_REPORT
+  bool report_on_fatalerror = false;
+  bool report_compact = false;
+  std::string report_directory;
+  std::string report_filename;
 
   inline PerIsolateOptions* get_per_isolate_options();
   void CheckOptions(std::vector<std::string>* errors) override;
@@ -456,6 +450,13 @@ extern Mutex cli_options_mutex;
 extern std::shared_ptr<PerProcessOptions> cli_options;
 
 }  // namespace per_process
+
+void HandleEnvOptions(std::shared_ptr<EnvironmentOptions> env_options);
+void HandleEnvOptions(std::shared_ptr<EnvironmentOptions> env_options,
+                      std::function<std::string(const char*)> opt_getter);
+
+std::vector<std::string> ParseNodeOptionsEnvVar(
+    const std::string& node_options, std::vector<std::string>* errors);
 }  // namespace node
 
 #endif  // defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS

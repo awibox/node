@@ -152,8 +152,8 @@ fs.open(Buffer.from('/open/some/file.txt'), 'r', (err, fd) => {
 
 On Windows, Node.js follows the concept of per-drive working directory. This
 behavior can be observed when using a drive path without a backslash. For
-example `fs.readdirSync('c:\\')` can potentially return a different result than
-`fs.readdirSync('c:')`. For more information, see
+example `fs.readdirSync('C:\\')` can potentially return a different result than
+`fs.readdirSync('C:')`. For more information, see
 [this MSDN page][MSDN-Rel-Path].
 
 ### URL object support
@@ -1710,9 +1710,9 @@ By default, the stream will not emit a `'close'` event after it has been
 destroyed. This is the opposite of the default for other `Readable` streams.
 Set the `emitClose` option to `true` to change this behavior.
 
-By providing the `fs` option it is possible to override the corresponding `fs`
-implementations for `open`, `read` and `close`. When providing the `fs` option,
-you must override `open`, `close` and `read`.
+By providing the `fs` option, it is possible to override the corresponding `fs`
+implementations for `open`, `read`, and `close`. When providing the `fs` option,
+overrides for `open`, `read`, and `close` are required.
 
 ```js
 const fs = require('fs');
@@ -1805,8 +1805,8 @@ Set the `emitClose` option to `true` to change this behavior.
 By providing the `fs` option it is possible to override the corresponding `fs`
 implementations for `open`, `write`, `writev` and `close`. Overriding `write()`
 without `writev()` can reduce performance as some optimizations (`_writev()`)
-will be disabled. When providing the `fs` option, you must override `open`,
-`close` and at least one of `write` and `writev`.
+will be disabled. When providing the `fs` option,  overrides for `open`,
+`close`, and at least one of `write` and `writev` are required.
 
 Like [`ReadStream`][], if `fd` is specified, [`WriteStream`][] will ignore the
 `path` argument and will use the specified file descriptor. This means that no
@@ -1949,7 +1949,7 @@ Node.js callbacks. `fs.existsSync()` does not use a callback.
 
 ```js
 if (fs.existsSync('/etc/passwd')) {
-  console.log('The file exists.');
+  console.log('The path exists.');
 }
 ```
 
@@ -2427,6 +2427,10 @@ Synchronous lstat(2).
 <!-- YAML
 added: v0.1.8
 changes:
+  - version: v13.11.0
+    pr-url: https://github.com/nodejs/node/pull/31530
+    description: In `recursive` mode, the callback now receives the first
+                 created path as an argument.
   - version: v10.12.0
     pr-url: https://github.com/nodejs/node/pull/21875
     description: The second argument can now be an `options` object with
@@ -2452,8 +2456,10 @@ changes:
 * `callback` {Function}
   * `err` {Error}
 
-Asynchronously creates a directory. No arguments other than a possible exception
-are given to the completion callback.
+Asynchronously creates a directory.
+
+The callback is given a possible exception and, if `recursive` is `true`, the
+first folder path created, `(err, [path])`.
 
 The optional `options` argument can be an integer specifying `mode` (permission
 and sticky bits), or an object with a `mode` property and a `recursive`
@@ -2483,6 +2489,9 @@ See also: mkdir(2).
 <!-- YAML
 added: v0.1.21
 changes:
+  - version: v13.11.0
+    pr-url: https://github.com/nodejs/node/pull/31530
+    description: In `recursive` mode, the first created path is returned now.
   - version: v10.12.0
     pr-url: https://github.com/nodejs/node/pull/21875
     description: The second argument can now be an `options` object with
@@ -2497,8 +2506,10 @@ changes:
 * `options` {Object|integer}
   * `recursive` {boolean} **Default:** `false`
   * `mode` {string|integer} Not supported on Windows. **Default:** `0o777`.
+* Returns: {string|undefined}
 
-Synchronously creates a directory. Returns `undefined`.
+Synchronously creates a directory. Returns `undefined`, or if `recursive` is
+`true`, the first folder path created.
 This is the synchronous version of [`fs.mkdir()`][].
 
 See also: mkdir(2).
@@ -2744,7 +2755,7 @@ changes:
 
 Read data from the file specified by `fd`.
 
-`buffer` is the buffer that the data will be written to.
+`buffer` is the buffer that the data (read from the fd) will be written to.
 
 `offset` is the offset in the buffer to start writing at.
 
@@ -2759,6 +2770,29 @@ The callback is given the three arguments, `(err, bytesRead, buffer)`.
 
 If this method is invoked as its [`util.promisify()`][]ed version, it returns
 a `Promise` for an `Object` with `bytesRead` and `buffer` properties.
+
+## `fs.read(fd, [options,] callback)`
+<!-- YAML
+added: v13.11.0
+changes:
+  - version: v13.11.0
+    pr-url: https://github.com/nodejs/node/pull/31402
+    description: Options object can be passed in
+                 to make Buffer, offset, length and position optional
+-->
+* `fd` {integer}
+* `options` {Object}
+  * `buffer` {Buffer|TypedArray|DataView} **Default:** `Buffer.alloc(16384)`
+  * `offset` {integer} **Default:** `0`
+  * `length` {integer} **Default:** `buffer.length`
+  * `position` {integer} **Default:** `null`
+* `callback` {Function}
+  * `err` {Error}
+  * `bytesRead` {integer}
+  * `buffer` {Buffer}
+
+Similar to the above `fs.read` function, this version takes an optional `options` object.
+If no `options` object is specified, it will default with the above values.
 
 ## `fs.readdir(path[, options], callback)`
 <!-- YAML
@@ -3034,6 +3068,68 @@ Returns the number of `bytesRead`.
 
 For detailed information, see the documentation of the asynchronous version of
 this API: [`fs.read()`][].
+
+## `fs.readSync(fd, buffer, [options])`
+<!-- YAML
+added: REPLACEME
+changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/32460
+    description: Options object can be passed in
+                 to make offset, length and position optional
+-->
+
+* `fd` {integer}
+* `buffer` {Buffer|TypedArray|DataView}
+* `options` {Object}
+  * `offset` {integer} **Default:** `0`
+  * `length` {integer} **Default:** `buffer.length`
+  * `position` {integer} **Default:** `null`
+* Returns: {number}
+
+Returns the number of `bytesRead`.
+
+Similar to the above `fs.readSync` function, this version takes an optional `options` object.
+If no `options` object is specified, it will default with the above values.
+
+For detailed information, see the documentation of the asynchronous version of
+this API: [`fs.read()`][].
+
+## `fs.readv(fd, buffers[, position], callback)`
+<!-- YAML
+added: REPLACEME
+-->
+
+* `fd` {integer}
+* `buffers` {ArrayBufferView[]}
+* `position` {integer}
+* `callback` {Function}
+  * `err` {Error}
+  * `bytesRead` {integer}
+  * `buffers` {ArrayBufferView[]}
+
+Read from a file specified by `fd` and write to an array of `ArrayBufferView`s
+using `readv()`.
+
+`position` is the offset from the beginning of the file from where data
+should be read. If `typeof position !== 'number'`, the data will be read
+from the current position.
+
+The callback will be given three arguments: `err`, `bytesRead`, and
+`buffers`. `bytesRead` is how many bytes were read from the file.
+
+## `fs.readvSync(fd, buffers[, position])`
+<!-- YAML
+added: REPLACEME
+-->
+
+* `fd` {integer}
+* `buffers` {ArrayBufferView[]}
+* `position` {integer}
+* Returns: {number} The number of bytes read.
+
+For detailed information, see the documentation of the asynchronous version of
+this API: [`fs.readv()`][].
 
 ## `fs.realpath(path[, options], callback)`
 <!-- YAML
@@ -3769,6 +3865,9 @@ The recursive option is only supported on macOS and Windows.
 An `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` exception will be thrown
 when the option is used on a platform that does not support it.
 
+On Windows, no events will be emitted if the watched directory is moved or
+renamed. An `EPERM` error is reported when the watched directory is deleted.
+
 #### Availability
 
 <!--type=misc-->
@@ -3831,6 +3930,9 @@ fs.watch('somedir', (eventType, filename) => {
 <!-- YAML
 added: v0.1.31
 changes:
+  - version: v10.5.0
+    pr-url: https://github.com/nodejs/node/pull/20220
+    description: The `bigint` option is now supported.
   - version: v7.6.0
     pr-url: https://github.com/nodejs/node/pull/10739
     description: The `filename` parameter can be a WHATWG `URL` object using
@@ -3839,6 +3941,7 @@ changes:
 
 * `filename` {string|Buffer|URL}
 * `options` {Object}
+  * `bigint` {boolean} **Default:** `false`
   * `persistent` {boolean} **Default:** `true`
   * `interval` {integer} **Default:** `5007`
 * `listener` {Function}
@@ -3864,7 +3967,8 @@ fs.watchFile('message.text', (curr, prev) => {
 });
 ```
 
-These stat objects are instances of `fs.Stat`.
+These stat objects are instances of `fs.Stat`. If the `bigint` option is `true`,
+the numeric values in these objects are specified as `BigInt`s.
 
 To be notified when the file was modified, not just accessed, it is necessary
 to compare `curr.mtime` and `prev.mtime`.
@@ -3893,6 +3997,10 @@ This happens when:
 <!-- YAML
 added: v0.0.2
 changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/31030
+    description: The `buffer` parameter won't coerce unsupported input to
+                 strings anymore.
   - version: v10.10.0
     pr-url: https://github.com/nodejs/node/pull/22150
     description: The `buffer` parameter can now be any `TypedArray` or a
@@ -3950,6 +4058,10 @@ the end of the file.
 <!-- YAML
 added: v0.11.5
 changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/31030
+    description: The `string` parameter won't coerce unsupported input to
+                 strings anymore.
   - version: v10.0.0
     pr-url: https://github.com/nodejs/node/pull/12562
     description: The `callback` parameter is no longer optional. Not passing
@@ -3973,7 +4085,7 @@ changes:
   * `string` {string}
 
 Write `string` to the file specified by `fd`. If `string` is not a string, then
-the value will be coerced to one.
+an exception will be thrown.
 
 `position` refers to the offset from the beginning of the file where this data
 should be written. If `typeof position !== 'number'` the data will be written at
@@ -4005,6 +4117,10 @@ details.
 <!-- YAML
 added: v0.1.29
 changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/31030
+    description: The `data` parameter won't coerce unsupported input to
+                 strings anymore.
   - version: v10.10.0
     pr-url: https://github.com/nodejs/node/pull/22150
     description: The `data` parameter can now be any `TypedArray` or a
@@ -4035,7 +4151,7 @@ changes:
   * `err` {Error}
 
 When `file` is a filename, asynchronously writes data to the file, replacing the
-file if it already exists.  `data` can be a string or a buffer.
+file if it already exists. `data` can be a string or a buffer.
 
 When `file` is a file descriptor, the behavior is similar to calling
 `fs.write()` directly (which is recommended). See the notes below on using
@@ -4091,6 +4207,10 @@ to contain only `', World'`.
 <!-- YAML
 added: v0.1.29
 changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/31030
+    description: The `data` parameter won't coerce unsupported input to
+                 strings anymore.
   - version: v10.10.0
     pr-url: https://github.com/nodejs/node/pull/22150
     description: The `data` parameter can now be any `TypedArray` or a
@@ -4119,6 +4239,10 @@ this API: [`fs.writeFile()`][].
 <!-- YAML
 added: v0.1.21
 changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/31030
+    description: The `buffer` parameter won't coerce unsupported input to
+                 strings anymore.
   - version: v10.10.0
     pr-url: https://github.com/nodejs/node/pull/22150
     description: The `buffer` parameter can now be any `TypedArray` or a
@@ -4145,6 +4269,10 @@ this API: [`fs.write(fd, buffer...)`][].
 <!-- YAML
 added: v0.11.5
 changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/31030
+    description: The `string` parameter won't coerce unsupported input to
+                 strings anymore.
   - version: v7.2.0
     pr-url: https://github.com/nodejs/node/pull/7856
     description: The `position` parameter is optional now.
@@ -4209,7 +4337,7 @@ this API: [`fs.writev()`][].
 
 The `fs.promises` API provides an alternative set of asynchronous file system
 methods that return `Promise` objects rather than using callbacks. The
-API is accessible via `require('fs').promises`.
+API is accessible via `require('fs').promises` or `require('fs/promises')`.
 
 ### class: `FileHandle`
 <!-- YAML
@@ -4223,8 +4351,8 @@ in that they provide an object oriented API for working with files.
 If a `FileHandle` is not closed using the
 `filehandle.close()` method, it might automatically close the file descriptor
 and will emit a process warning, thereby helping to prevent memory leaks.
-Please do not rely on this behavior in your code because it is unreliable and
-your file may not be closed. Instead, always explicitly close `FileHandle`s.
+Please do not rely on this behavior because it is unreliable and
+the file may not be closed. Instead, always explicitly close `FileHandle`s.
 Node.js may change this behavior in the future.
 
 Instances of the `FileHandle` object are created internally by the
@@ -4344,6 +4472,17 @@ Following successful read, the `Promise` is resolved with an object with a
 `bytesRead` property specifying the number of bytes read, and a `buffer`
 property that is a reference to the passed in `buffer` argument.
 
+#### `filehandle.read(options)`
+<!-- YAML
+added: v13.11.0
+-->
+* `options` {Object}
+  * `buffer` {Buffer|Uint8Array} **Default:** `Buffer.alloc(16384)`
+  * `offset` {integer} **Default:** `0`
+  * `length` {integer} **Default:** `buffer.length`
+  * `position` {integer} **Default:** `null`
+* Returns: {Promise}
+
 #### `filehandle.readFile(options)`
 <!-- YAML
 added: v10.0.0
@@ -4367,6 +4506,25 @@ If one or more `filehandle.read()` calls are made on a file handle and then a
 `filehandle.readFile()` call is made, the data will be read from the current
 position till the end of the file. It doesn't always read from the beginning
 of the file.
+
+#### `filehandle.readv(buffers[, position])`
+<!-- YAML
+added: REPLACEME
+-->
+
+* `buffers` {ArrayBufferView[]}
+* `position` {integer}
+* Returns: {Promise}
+
+Read from a file and write to an array of `ArrayBufferView`s
+
+The `Promise` is resolved with an object containing a `bytesRead` property
+identifying the number of bytes read, and a `buffers` property containing
+a reference to the `buffers` input.
+
+`position` is the offset from the beginning of the file where this data
+should be read from. If `typeof position !== 'number'`, the data will be read
+from the current position.
 
 #### `filehandle.stat([options])`
 <!-- YAML
@@ -4482,6 +4640,11 @@ This function does not work on AIX versions before 7.1, it will resolve the
 #### `filehandle.write(buffer[, offset[, length[, position]]])`
 <!-- YAML
 added: v10.0.0
+changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/31030
+    description: The `buffer` parameter won't coerce unsupported input to
+                 buffers anymore.
 -->
 
 * `buffer` {Buffer|Uint8Array}
@@ -4514,6 +4677,11 @@ the end of the file.
 #### `filehandle.write(string[, position[, encoding]])`
 <!-- YAML
 added: v10.0.0
+changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/31030
+    description: The `string` parameter won't coerce unsupported input to
+                 strings anymore.
 -->
 
 * `string` {string}
@@ -4522,7 +4690,7 @@ added: v10.0.0
 * Returns: {Promise}
 
 Write `string` to the file. If `string` is not a string, then
-the value will be coerced to one.
+an exception will be thrown.
 
 The `Promise` is resolved with an object containing a `bytesWritten` property
 identifying the number of bytes written, and a `buffer` property containing
@@ -4545,6 +4713,11 @@ the end of the file.
 #### `filehandle.writeFile(data, options)`
 <!-- YAML
 added: v10.0.0
+changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/31030
+    description: The `data` parameter won't coerce unsupported input to
+                 strings anymore.
 -->
 
 * `data` {string|Buffer|Uint8Array}
@@ -4798,8 +4971,8 @@ added: v10.0.0
   * `mode` {string|integer} Not supported on Windows. **Default:** `0o777`.
 * Returns: {Promise}
 
-Asynchronously creates a directory then resolves the `Promise` with no
-arguments upon success.
+Asynchronously creates a directory then resolves the `Promise` with either no
+arguments, or the first folder path created if `recursive` is `true`.
 
 The optional `options` argument can be an integer specifying `mode` (permission
 and sticky bits), or an object with a `mode` property and a `recursive`
@@ -4928,6 +5101,18 @@ will be passed as `Buffer` objects.
 
 If `options.withFileTypes` is set to `true`, the resolved array will contain
 [`fs.Dirent`][] objects.
+
+```js
+const fs = require('fs');
+
+async function print(path) {
+  const files = await fs.promises.readdir(path);
+  for (const file of files) {
+    console.log(file);
+  }
+}
+print('./').catch(console.error);
+```
 
 ### `fsPromises.readFile(path[, options])`
 <!-- YAML
@@ -5133,6 +5318,11 @@ The `atime` and `mtime` arguments follow these rules:
 ### `fsPromises.writeFile(file, data[, options])`
 <!-- YAML
 added: v10.0.0
+changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/31030
+    description: The `data` parameter won't coerce unsupported input to
+                 strings anymore.
 -->
 
 * `file` {string|Buffer|URL|FileHandle} filename or `FileHandle`
@@ -5546,6 +5736,7 @@ the file contents.
 [`fs.readFileSync()`]: #fs_fs_readfilesync_path_options
 [`fs.readdir()`]: #fs_fs_readdir_path_options_callback
 [`fs.readdirSync()`]: #fs_fs_readdirsync_path_options
+[`fs.readv()`]: #fs_fs_readv_fd_buffers_position_callback
 [`fs.realpath()`]: #fs_fs_realpath_path_options_callback
 [`fs.rmdir()`]: #fs_fs_rmdir_path_options_callback
 [`fs.stat()`]: #fs_fs_stat_path_options_callback

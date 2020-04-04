@@ -1,5 +1,6 @@
 #include "debug_utils-inl.h"  // NOLINT(build/include)
 #include "env-inl.h"
+#include "node_internals.h"
 
 #ifdef __POSIX__
 #if defined(__linux__)
@@ -53,6 +54,37 @@
 #endif  // _WIN32
 
 namespace node {
+namespace per_process {
+EnabledDebugList enabled_debug_list;
+}
+
+void EnabledDebugList::Parse(Environment* env) {
+  std::string cats;
+  credentials::SafeGetenv("NODE_DEBUG_NATIVE", &cats, env);
+  Parse(cats, true);
+}
+
+void EnabledDebugList::Parse(const std::string& cats, bool enabled) {
+  std::string debug_categories = cats;
+  while (!debug_categories.empty()) {
+    std::string::size_type comma_pos = debug_categories.find(',');
+    std::string wanted = ToLower(debug_categories.substr(0, comma_pos));
+
+#define V(name)                                                                \
+  {                                                                            \
+    static const std::string available_category = ToLower(#name);              \
+    if (available_category.find(wanted) != std::string::npos)                  \
+      set_enabled(DebugCategory::name, enabled);                               \
+  }
+
+    DEBUG_CATEGORY_NAMES(V)
+#undef V
+
+    if (comma_pos == std::string::npos) break;
+    // Use everything after the `,` as the list for the next iteration.
+    debug_categories = debug_categories.substr(comma_pos + 1);
+  }
+}
 
 #ifdef __POSIX__
 #if HAVE_EXECINFO_H
@@ -100,16 +132,14 @@ class PosixSymbolDebuggingContext final : public NativeSymbolDebuggingContext {
 
 std::unique_ptr<NativeSymbolDebuggingContext>
 NativeSymbolDebuggingContext::New() {
-  return std::unique_ptr<NativeSymbolDebuggingContext>(
-      new PosixSymbolDebuggingContext());
+  return std::make_unique<PosixSymbolDebuggingContext>();
 }
 
 #else  // HAVE_EXECINFO_H
 
 std::unique_ptr<NativeSymbolDebuggingContext>
 NativeSymbolDebuggingContext::New() {
-  return std::unique_ptr<NativeSymbolDebuggingContext>(
-      new NativeSymbolDebuggingContext());
+  return std::make_unique<NativeSymbolDebuggingContext>();
 }
 
 #endif  // HAVE_EXECINFO_H
@@ -468,9 +498,7 @@ void FWrite(FILE* file, const std::string& str) {
   std::vector<wchar_t> wbuf(n);
   MultiByteToWideChar(CP_UTF8, 0, str.data(), str.size(), wbuf.data(), n);
 
-  // Don't include the final null character in the output
-  CHECK_GT(n, 0);
-  WriteConsoleW(handle, wbuf.data(), n - 1, nullptr, nullptr);
+  WriteConsoleW(handle, wbuf.data(), n, nullptr, nullptr);
   return;
 #elif defined(__ANDROID__)
   if (file == stderr) {

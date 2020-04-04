@@ -51,7 +51,13 @@ overhead of creating Workers would likely exceed their benefit.
 
 When implementing a worker pool, use the [`AsyncResource`][] API to inform
 diagnostic tools (e.g. in order to provide asynchronous stack traces) about the
-correlation between tasks and their outcomes.
+correlation between tasks and their outcomes. See
+["Using `AsyncResource` for a `Worker` thread pool"][async-resource-worker-pool]
+in the `async_hooks` documentation for an example implementation.
+
+Worker threads inherit non-process-specific options by default. Refer to
+[`Worker constructor options`][] to know how to customize worker thread options,
+specifically `argv` and `execArgv` options.
 
 ## `worker.isMainThread`
 <!-- YAML
@@ -507,6 +513,13 @@ if (isMainThread) {
 <!-- YAML
 added: v10.5.0
 changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/32278
+    description: The `transferList` option was introduced.
+  - version: v13.12.0
+    pr-url: https://github.com/nodejs/node/pull/31664
+    description: The `filename` parameter can be a WHATWG `URL` object using
+                 `file:` protocol.
   - version: v13.2.0
     pr-url: https://github.com/nodejs/node/pull/26628
     description: The `resourceLimits` option was introduced.
@@ -515,9 +528,10 @@ changes:
     description: The `argv` option was introduced.
 -->
 
-* `filename` {string} The path to the Worker’s main script. Must be
-  either an absolute path or a relative path (i.e. relative to the
-  current working directory) starting with `./` or `../`.
+* `filename` {string|URL} The path to the Worker’s main script or module. Must
+  be either an absolute path or a relative path (i.e. relative to the
+  current working directory) starting with `./` or `../`, or a WHATWG `URL`
+  object using `file:` protocol.
   If `options.eval` is `true`, this is a string containing JavaScript code
   rather than a path.
 * `options` {Object}
@@ -530,8 +544,9 @@ changes:
     to specify that the parent thread and the child thread should share their
     environment variables; in that case, changes to one thread’s `process.env`
     object will affect the other thread as well. **Default:** `process.env`.
-  * `eval` {boolean} If `true`, interpret the first argument to the constructor
-    as a script that is executed once the worker is online.
+  * `eval` {boolean} If `true` and the first argument is a `string`, interpret
+    the first argument to the constructor as a script that is executed once the
+    worker is online.
   * `execArgv` {string[]} List of node CLI options passed to the worker.
     V8 options (such as `--max-old-space-size`) and options that affect the
     process (such as `--title`) are not supported. If set, this will be provided
@@ -582,6 +597,8 @@ exited by calling [`process.exit()`][], the `exitCode` parameter will be the
 passed exit code. If the worker was terminated, the `exitCode` parameter will
 be `1`.
 
+This is the final event emitted by any `Worker` instance.
+
 ### Event: `'message'`
 <!-- YAML
 added: v10.5.0
@@ -593,6 +610,9 @@ The `'message'` event is emitted when the worker thread has invoked
 [`require('worker_threads').parentPort.postMessage()`][].
 See the [`port.on('message')`][] event for more details.
 
+All messages sent from the worker thread will be emitted before the
+[`'exit'` event][] is emitted on the `Worker` object.
+
 ### Event: `'online'`
 <!-- YAML
 added: v10.5.0
@@ -600,6 +620,21 @@ added: v10.5.0
 
 The `'online'` event is emitted when the worker thread has started executing
 JavaScript code.
+
+### `worker.getHeapSnapshot()`
+<!-- YAML
+added: v13.9.0
+-->
+
+* Returns: {Promise} A promise for a Readable Stream containing
+  a V8 heap snapshot
+
+Returns a readable stream for a V8 snapshot of the current state of the Worker.
+See [`v8.getHeapSnapshot()`][] for more details.
+
+If the Worker thread is no longer running, which may occur before the
+[`'exit'` event][] is emitted, the returned `Promise` will be rejected
+immediately with an [`ERR_WORKER_NOT_RUNNING`][] error.
 
 ### `worker.postMessage(value[, transferList])`
 <!-- YAML
@@ -716,6 +751,7 @@ active handle in the event system. If the worker is already `unref()`ed calling
 [`'exit'` event]: #worker_threads_event_exit
 [`AsyncResource`]: async_hooks.html#async_hooks_class_asyncresource
 [`Buffer`]: buffer.html
+[`ERR_WORKER_NOT_RUNNING`]: errors.html#ERR_WORKER_NOT_RUNNING
 [`EventEmitter`]: events.html
 [`EventTarget`]: https://developer.mozilla.org/en-US/docs/Web/API/EventTarget
 [`MessagePort`]: #worker_threads_class_messageport
@@ -743,13 +779,16 @@ active handle in the event system. If the worker is already `unref()`ed calling
 [`require('worker_threads').threadId`]: #worker_threads_worker_threadid
 [`require('worker_threads').workerData`]: #worker_threads_worker_workerdata
 [`trace_events`]: tracing.html
+[`v8.getHeapSnapshot()`]: v8.html#v8_v8_getheapsnapshot
 [`vm`]: vm.html
+[`Worker constructor options`]: #worker_threads_new_worker_filename_options
 [`worker.on('message')`]: #worker_threads_event_message_1
 [`worker.postMessage()`]: #worker_threads_worker_postmessage_value_transferlist
 [`worker.SHARE_ENV`]: #worker_threads_worker_share_env
 [`worker.terminate()`]: #worker_threads_worker_terminate
 [`worker.threadId`]: #worker_threads_worker_threadid_1
 [Addons worker support]: addons.html#addons_worker_support
+[async-resource-worker-pool]: async_hooks.html#async-resource-worker-pool
 [HTML structured clone algorithm]: https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm
 [Signals events]: process.html#process_signal_events
 [Web Workers]: https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API

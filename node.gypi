@@ -70,7 +70,7 @@
     }],
     [ 'node_use_bundled_v8=="true"', {
       'dependencies': [
-        'tools/v8_gypfiles/v8.gyp:v8_maybe_snapshot',
+        'tools/v8_gypfiles/v8.gyp:v8_snapshot',
         'tools/v8_gypfiles/v8.gyp:v8_libplatform',
       ],
     }],
@@ -271,6 +271,16 @@
         ],
       },
     }],
+    [ 'debug_node=="true"', {
+      'cflags!': [ '-O3' ],
+      'cflags': [ '-g', '-O0' ],
+      'defines': [ 'DEBUG' ],
+      'xcode_settings': {
+        'OTHER_CFLAGS': [
+          '-g', '-O0'
+        ],
+      },
+    }],
     [ 'coverage=="true" and node_shared=="false" and OS in "mac freebsd linux"', {
       'cflags!': [ '-O3' ],
       'ldflags': [ '--coverage',
@@ -305,22 +315,6 @@
     [ 'OS in "freebsd linux"', {
       'ldflags': [ '-Wl,-z,relro',
                    '-Wl,-z,now' ]
-    }],
-    [ 'OS=="linux" and '
-      'target_arch=="x64" and '
-      'llvm_version=="0.0"', {
-      'ldflags': [
-        '-Wl,-T',
-        '<!(echo "$(pwd)/src/large_pages/ld.implicit.script")',
-      ]
-    }],
-    [ 'OS=="linux" and '
-      'target_arch=="x64" and '
-      'llvm_version!="0.0"', {
-      'ldflags': [
-        '-Wl,-T',
-        '<!(echo "$(pwd)/src/large_pages/ld.implicit.script.lld")',
-      ]
     }],
     [ 'node_use_openssl=="true"', {
       'defines': [ 'HAVE_OPENSSL=1' ],

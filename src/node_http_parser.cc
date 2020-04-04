@@ -74,8 +74,13 @@ const uint32_t kOnHeadersComplete = 1;
 const uint32_t kOnBody = 2;
 const uint32_t kOnMessageComplete = 3;
 const uint32_t kOnExecute = 4;
+const uint32_t kOnTimeout = 5;
 // Any more fields than this will be flushed into JS
 const size_t kMaxHeaderFieldsCount = 32;
+
+inline bool IsOWS(char c) {
+  return c == ' ' || c == '\t';
+}
 
 // helper class for the Parser
 struct StringPtr {
@@ -136,10 +141,19 @@ struct StringPtr {
 
 
   Local<String> ToString(Environment* env) const {
-    if (str_)
+    if (size_ != 0)
       return OneByteString(env->isolate(), str_, size_);
     else
       return String::Empty(env->isolate());
+  }
+
+
+  // Strip trailing OWS (SPC or HTAB) from string.
+  Local<String> ToTrimmedString(Environment* env) {
+    while (size_ > 0 && IsOWS(str_[size_ - 1])) {
+      size_--;
+    }
+    return ToString(env);
   }
 
 
@@ -168,6 +182,7 @@ class Parser : public AsyncWrap, public StreamListener {
     num_fields_ = num_values_ = 0;
     url_.Reset();
     status_message_.Reset();
+    header_parsing_start_time_ = uv_hrtime();
     return 0;
   }
 
@@ -317,6 +332,7 @@ class Parser : public AsyncWrap, public StreamListener {
           this, InternalCallbackScope::kSkipTaskQueues);
       head_response = cb.As<Function>()->Call(
           env()->context(), object(), arraysize(argv), argv);
+      if (head_response.IsEmpty()) callback_scope.MarkAsFailed();
     }
 
     int64_t val;
@@ -388,6 +404,7 @@ class Parser : public AsyncWrap, public StreamListener {
       InternalCallbackScope callback_scope(
           this, InternalCallbackScope::kSkipTaskQueues);
       r = cb.As<Function>()->Call(env()->context(), object(), 0, nullptr);
+      if (r.IsEmpty()) callback_scope.MarkAsFailed();
     }
 
     if (r.IsEmpty()) {
@@ -489,6 +506,7 @@ class Parser : public AsyncWrap, public StreamListener {
     bool lenient = args[3]->IsTrue();
 
     uint64_t max_http_header_size = 0;
+    uint64_t headers_timeout = 0;
 
     CHECK(args[0]->IsInt32());
     CHECK(args[1]->IsObject());
@@ -499,6 +517,11 @@ class Parser : public AsyncWrap, public StreamListener {
     }
     if (max_http_header_size == 0) {
       max_http_header_size = env->options()->max_http_header_size;
+    }
+
+    if (args.Length() > 4) {
+      CHECK(args[4]->IsInt32());
+      headers_timeout = args[4].As<Number>()->Value();
     }
 
     llhttp_type_t type =
@@ -517,7 +540,7 @@ class Parser : public AsyncWrap, public StreamListener {
 
     parser->set_provider_type(provider);
     parser->AsyncReset(args[1].As<Object>());
-    parser->Init(type, max_http_header_size, lenient);
+    parser->Init(type, max_http_header_size, lenient, headers_timeout);
   }
 
   template <bool should_pause>
@@ -620,6 +643,24 @@ class Parser : public AsyncWrap, public StreamListener {
     // Exception
     if (ret.IsEmpty())
       return;
+
+    // check header parsing time
+    if (header_parsing_start_time_ != 0 && headers_timeout_ != 0) {
+      uint64_t now = uv_hrtime();
+      uint64_t parsing_time = (now - header_parsing_start_time_) / 1e6;
+
+      if (parsing_time > headers_timeout_) {
+        Local<Value> cb =
+            object()->Get(env()->context(), kOnTimeout).ToLocalChecked();
+
+        if (!cb->IsFunction())
+          return;
+
+        MakeCallback(cb.As<Function>(), 0, nullptr);
+
+        return;
+      }
+    }
 
     Local<Value> cb =
         object()->Get(env()->context(), kOnExecute).ToLocalChecked();
@@ -730,7 +771,7 @@ class Parser : public AsyncWrap, public StreamListener {
 
     for (size_t i = 0; i < num_values_; ++i) {
       headers_v[i * 2] = fields_[i].ToString(env());
-      headers_v[i * 2 + 1] = values_[i].ToString(env());
+      headers_v[i * 2 + 1] = values_[i].ToTrimmedString(env());
     }
 
     return Array::New(env()->isolate(), headers_v, num_values_ * 2);
@@ -764,7 +805,8 @@ class Parser : public AsyncWrap, public StreamListener {
   }
 
 
-  void Init(llhttp_type_t type, uint64_t max_http_header_size, bool lenient) {
+  void Init(llhttp_type_t type, uint64_t max_http_header_size,
+            bool lenient, uint64_t headers_timeout) {
     llhttp_init(&parser_, type, &settings);
     llhttp_set_lenient(&parser_, lenient);
     header_nread_ = 0;
@@ -775,6 +817,8 @@ class Parser : public AsyncWrap, public StreamListener {
     have_flushed_ = false;
     got_exception_ = false;
     max_http_header_size_ = max_http_header_size;
+    header_parsing_start_time_ = 0;
+    headers_timeout_ = headers_timeout;
   }
 
 
@@ -816,6 +860,8 @@ class Parser : public AsyncWrap, public StreamListener {
   bool pending_pause_ = false;
   uint64_t header_nread_ = 0;
   uint64_t max_http_header_size_;
+  uint64_t headers_timeout_;
+  uint64_t header_parsing_start_time_ = 0;
 
   // These are helper functions for filling `http_parser_settings`, which turn
   // a member function of Parser into a C-style HTTP parser callback.
@@ -858,7 +904,7 @@ void InitializeHttpParser(Local<Object> target,
                           void* priv) {
   Environment* env = Environment::GetCurrent(context);
   Local<FunctionTemplate> t = env->NewFunctionTemplate(Parser::New);
-  t->InstanceTemplate()->SetInternalFieldCount(1);
+  t->InstanceTemplate()->SetInternalFieldCount(Parser::kInternalFieldCount);
   t->SetClassName(FIXED_ONE_BYTE_STRING(env->isolate(), "HTTPParser"));
 
   t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "REQUEST"),
@@ -875,6 +921,8 @@ void InitializeHttpParser(Local<Object> target,
          Integer::NewFromUnsigned(env->isolate(), kOnMessageComplete));
   t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kOnExecute"),
          Integer::NewFromUnsigned(env->isolate(), kOnExecute));
+  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kOnTimeout"),
+         Integer::NewFromUnsigned(env->isolate(), kOnTimeout));
 
   Local<Array> methods = Array::New(env->isolate());
 #define V(num, name, string)                                                  \

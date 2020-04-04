@@ -44,7 +44,7 @@ const uint64_t timeOrigin = PERFORMANCE_NOW();
 const double timeOriginTimestamp = GetCurrentTimeInMicroseconds();
 uint64_t performance_v8_start;
 
-void performance_state::Mark(enum PerformanceMilestone milestone,
+void PerformanceState::Mark(enum PerformanceMilestone milestone,
                              uint64_t ts) {
   this->milestones[milestone] = ts;
   TRACE_EVENT_INSTANT_WITH_TIMESTAMP0(
@@ -244,6 +244,10 @@ void PerformanceGCCallback(Environment* env,
                            env->kind_string(),
                            Integer::New(env->isolate(), entry->gckind()),
                            attr).Check();
+    obj->DefineOwnProperty(context,
+                           env->flags_string(),
+                           Integer::New(env->isolate(), entry->gcflags()),
+                           attr).Check();
     PerformanceEntry::Notify(env, entry->kind(), obj);
   }
 }
@@ -263,13 +267,14 @@ void MarkGarbageCollectionEnd(Isolate* isolate,
                               GCCallbackFlags flags,
                               void* data) {
   Environment* env = static_cast<Environment*>(data);
-  performance_state* state = env->performance_state();
+  PerformanceState* state = env->performance_state();
   // If no one is listening to gc performance entries, do not create them.
   if (!state->observers[NODE_PERFORMANCE_ENTRY_TYPE_GC])
     return;
   auto entry = std::make_unique<GCPerformanceEntry>(
       env,
       static_cast<PerformanceGCKind>(type),
+      static_cast<PerformanceGCFlags>(flags),
       state->performance_last_gc_start_mark,
       PERFORMANCE_NOW());
   env->SetUnrefImmediate([entry = std::move(entry)](Environment* env) mutable {
@@ -548,7 +553,7 @@ void Initialize(Local<Object> target,
                 void* priv) {
   Environment* env = Environment::GetCurrent(context);
   Isolate* isolate = env->isolate();
-  performance_state* state = env->performance_state();
+  PerformanceState* state = env->performance_state();
 
   target->Set(context,
               FIXED_ONE_BYTE_STRING(isolate, "observerCounts"),
@@ -587,6 +592,21 @@ void Initialize(Local<Object> target,
   NODE_DEFINE_CONSTANT(constants, NODE_PERFORMANCE_GC_INCREMENTAL);
   NODE_DEFINE_CONSTANT(constants, NODE_PERFORMANCE_GC_WEAKCB);
 
+  NODE_DEFINE_CONSTANT(
+    constants, NODE_PERFORMANCE_GC_FLAGS_NO);
+  NODE_DEFINE_CONSTANT(
+    constants, NODE_PERFORMANCE_GC_FLAGS_CONSTRUCT_RETAINED);
+  NODE_DEFINE_CONSTANT(
+    constants, NODE_PERFORMANCE_GC_FLAGS_FORCED);
+  NODE_DEFINE_CONSTANT(
+    constants, NODE_PERFORMANCE_GC_FLAGS_SYNCHRONOUS_PHANTOM_PROCESSING);
+  NODE_DEFINE_CONSTANT(
+    constants, NODE_PERFORMANCE_GC_FLAGS_ALL_AVAILABLE_GARBAGE);
+  NODE_DEFINE_CONSTANT(
+    constants, NODE_PERFORMANCE_GC_FLAGS_ALL_EXTERNAL_MEMORY);
+  NODE_DEFINE_CONSTANT(
+    constants, NODE_PERFORMANCE_GC_FLAGS_SCHEDULE_IDLE);
+
 #define V(name, _)                                                            \
   NODE_DEFINE_HIDDEN_CONSTANT(constants, NODE_PERFORMANCE_ENTRY_TYPE_##name);
   NODE_PERFORMANCE_ENTRY_TYPES(V)
@@ -620,7 +640,8 @@ void Initialize(Local<Object> target,
   Local<FunctionTemplate> eldh =
       env->NewFunctionTemplate(ELDHistogramNew);
   eldh->SetClassName(eldh_classname);
-  eldh->InstanceTemplate()->SetInternalFieldCount(1);
+  eldh->InstanceTemplate()->SetInternalFieldCount(
+      ELDHistogram::kInternalFieldCount);
   env->SetProtoMethod(eldh, "exceeds", ELDHistogramExceeds);
   env->SetProtoMethod(eldh, "min", ELDHistogramMin);
   env->SetProtoMethod(eldh, "max", ELDHistogramMax);

@@ -26,7 +26,8 @@ class Worker : public AsyncWrap {
          v8::Local<v8::Object> wrap,
          const std::string& url,
          std::shared_ptr<PerIsolateOptions> per_isolate_opts,
-         std::vector<std::string>&& exec_argv);
+         std::vector<std::string>&& exec_argv,
+         std::shared_ptr<KVStore> env_vars);
   ~Worker() override;
 
   // Run the worker. This is only called from the worker thread.
@@ -59,6 +60,7 @@ class Worker : public AsyncWrap {
   static void GetResourceLimits(
       const v8::FunctionCallbackInfo<v8::Value>& args);
   v8::Local<v8::Float64Array> GetResourceLimits(v8::Isolate* isolate) const;
+  static void TakeHeapSnapshot(const v8::FunctionCallbackInfo<v8::Value>& args);
 
  private:
   void CreateEnvMessagePort(Environment* env);
@@ -71,20 +73,18 @@ class Worker : public AsyncWrap {
 
   MultiIsolatePlatform* platform_;
   v8::Isolate* isolate_ = nullptr;
-  bool start_profiler_idle_notifier_;
   uv_thread_t tid_;
 
-#if HAVE_INSPECTOR
-  std::unique_ptr<inspector::ParentInspectorHandle> inspector_parent_handle_;
-#endif
+  std::unique_ptr<InspectorParentHandle> inspector_parent_handle_;
 
   // This mutex protects access to all variables listed below it.
   mutable Mutex mutex_;
 
   bool thread_joined_ = true;
   const char* custom_error_ = nullptr;
+  std::string custom_error_str_;
   int exit_code_ = 0;
-  uint64_t thread_id_ = -1;
+  ThreadId thread_id_;
   uintptr_t stack_base_ = 0;
 
   // Custom resource constraints:
@@ -99,9 +99,6 @@ class Worker : public AsyncWrap {
   std::unique_ptr<MessagePortData> child_port_data_;
   std::shared_ptr<KVStore> env_vars_;
 
-  // The child port is kept alive by the child Environment's persistent
-  // handle to it, as long as that child Environment exists.
-  MessagePort* child_port_ = nullptr;
   // This is always kept alive because the JS object associated with the Worker
   // instance refers to it via its [kPort] property.
   MessagePort* parent_port_ = nullptr;
